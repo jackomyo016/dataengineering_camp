@@ -8,11 +8,18 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "dotenv>=0.9.9",
+    "google-genai>=3.3.0",
+    "groq>=1.7.0",
     "kestra>=2.0.0",
+    "matplotlib>=3.11.2",
     "openpyxl>=3.1.5",
     "pandas>=3.0.5",
     "psycopg[binary,pool]>=3.3.4",
     "pyarrow>=25.0.1",
+    "pydantic>=2.14.3",
+    "rapidfuzz>=3.14.6",
+    "scikit-learn>=1.9.1",
     "sqlalchemy>=2.0.52",
     "tqdm>=4.70.0",
 ]

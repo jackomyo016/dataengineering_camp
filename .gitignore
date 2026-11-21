@@ -266,3 +266,8 @@ terraform.rc
 
 
 pipeline/notebook.ipynb
+*.csv
+*.xlsx
+*DS_Store
+*.ipynb
+*.png

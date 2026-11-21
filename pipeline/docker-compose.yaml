@@ -56,6 +56,7 @@ services:
       - kestra_tmp:/tmp/kestra-wd
     environment:
       SECRET_GCP_SERVICE_ACCOUNT_JSON: $SECRET_GCP_SERVICE_ACCOUNT_JSON
+      GEMINI_KEY: ${GEMINI_KEY}
 
       KESTRA_CONFIGURATION: |
         datasources:
@@ -77,6 +78,11 @@ services:
               basePath: "/app/storage"
           queue:
             type: postgres
+          ai:
+            type: gemini
+            gemini:
+              model_name: gemini-3.6-flash
+              api-key: ${GEMINI_KEY}
           tasks:
             tmpDir:
               path: /tmp/kestra-wd/tmp

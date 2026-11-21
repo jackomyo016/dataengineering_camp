@@ -605,19 +605,22 @@ def appliquer_branches(df, col_m="Métier", col_b="Branche professionnelle", wor
 
 
 if __name__ == "__main__":
-    # associer_branche("Médeciin","NC")
+    associer_branche("ATTACHE ADMNISTRATION RH (PROFESSIONNEL DE SANTE)","NC")
     # associer("Métier","opthtalmo")
 
-    df = pd.read_excel(
-    'firstransform.xlsx',   # on lit en texte brut, sans interprétation
-    converters={'Date': lambda x: pd.to_datetime(x, format='%d/%m/%Y', errors='coerce')},
-        )
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df[df["Date"] > "2026-06-30"]
+    # df = pd.read_excel(
+    # 'firstransform.xlsx',   # on lit en texte brut, sans interprétation
+    # converters={'Date': lambda x: pd.to_datetime(x, format='%d/%m/%Y', errors='coerce')},
+    #     )
+    # df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    # df = df[(df["Date"] > "2026-10-01") & ((df["Date"] <= "2026-10-31"))]
 
-    COLONNES = ["Motif", "Sexe", "Orientation conseillée","Métier"]
+    # COLONNES = ["Motif", "Sexe", "Orientation conseillée","Métier"]
 
-    for col in COLONNES:
-        df[col] = associer_colonne(df[col], col)
+    # for col in COLONNES:
+    #     df[col] = associer_colonne(df[col], col)
 
-    df["Branche professionnelle"] = appliquer_branches(df)
+    # df["Branche professionnelle"] = appliquer_branches(df)
+
+    #Logger tout ça
+    #Récupérer la liste des métiers ambigus

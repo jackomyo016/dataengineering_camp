@@ -209,8 +209,12 @@ rédacteur, chroniqueur).
 NC = "NC"
 EFFORT_B = "high"
 EXCLURE = {"NC"}                                   # valeurs qui ne sont pas de vraies branches : jamais proposées
-FICHIER = "corresp_metier_branche.json"            # sauvegarde du dictionnaire
+FICHIER = "corresp_metierxprofil_branche.json"     # nouveau fichier : clés « métier||profil »
+SEP = "||"
+PROFIL_NPEC = "NON PRIS EN CHARGE"                 # un profil de cette valeur impose la branche NON PRIS EN CHARGE
+COL_PROFIL = "Profil de l'appelant"
 verrou_corresp = threading.Lock()
+
 
 
 cache = json.load(open(CACHE, encoding="utf-8")) if os.path.exists(CACHE) else {}
@@ -460,22 +464,70 @@ def associer_colonne(serie, col):
             associer.sauver()                         # écriture unique, même en cas d'erreur
     return serie.map(lambda x: (resultat.get(str(x).strip()) or x) if pd.notna(x) else x)
 
+
+####
 def nettoyer(s):
     """Retire l'artefact de copier-coller [/](https://...) (affichage uniquement)."""
     return re.sub(r"\[/\]\([^)]*\)", "/", str(s)).strip()
 
-# --- Sauvegarde / chargement du dictionnaire ---
+
+# --- Profil et clés (métier, profil) ---
+def est_npec(profil):
+    return (profil is not None and not pd.isna(profil)
+            and str(profil).strip().upper() in {"NON PRIS EN CHARGE", "NON PRISE EN CHARGE"})
+
+def norm_profil(profil):
+    """Profil normalisé : NON PRIS EN CHARGE (et sa variante) -> PROFIL_NPEC ; vide, NAN, NON RENSEIGNE -> NC."""
+    if profil is None or pd.isna(profil):
+        return NC
+    if est_npec(profil):
+        return PROFIL_NPEC
+    s = str(profil).strip()
+    return NC if s.upper() in {"", "NAN", "NON RENSEIGNE"} else s
+
+def texte_profil(profil):
+    """Profil affiché dans le prompt ; NC ou NON PRIS EN CHARGE -> « non précisé »."""
+    p = norm_profil(profil)
+    return "non précisé" if p in {NC, PROFIL_NPEC} else p
+
+def cle_mp(metier, profil):
+    """Clé du dictionnaire : (métier, profil normalisé), ou None si le métier est vide."""
+    if metier is None or pd.isna(metier) or not str(metier).strip():
+        return None
+    return (str(metier).strip(), norm_profil(profil))
+
+# --- Sauvegarde / chargement du dictionnaire (clés (m, p) <-> « m||p » dans le JSON) ---
+def vers_json(d):
+    return {f"{m}{SEP}{p}": v for (m, p), v in d.items()}
+
+def depuis_json(d):
+    out = {}
+    for k, v in d.items():
+        if SEP in k:
+            m, p = k.rsplit(SEP, 1)
+            out[(m, p or NC)] = v
+    return out
+
 def sauver_corresp():
     """Écriture atomique : le fichier n'est jamais à moitié écrit. À appeler sous verrou_corresp."""
     tmp = FICHIER + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(corresp_metier_branche, f, ensure_ascii=False, indent=1)
+        json.dump(vers_json(corresp_metierxprofil_branche), f, ensure_ascii=False, indent=1)
     os.replace(tmp, FICHIER)
 
+if "corresp_metierxprofil_branche" not in globals():
+    corresp_metierxprofil_branche = {}
+normalise = {}
+for (m, p), v in list(corresp_metierxprofil_branche.items()):          # clés déjà en mémoire (ex : multiples_final)
+    k = cle_mp(m, p)
+    if k is not None:
+        normalise[k] = v
+corresp_metierxprofil_branche.clear()
+corresp_metierxprofil_branche.update(normalise)
 if os.path.exists(FICHIER):
-    sur_disque = json.load(open(FICHIER, encoding="utf-8"))
+    sur_disque = depuis_json(json.load(open(FICHIER, encoding="utf-8")))
     for k, v in sur_disque.items():
-        corresp_metier_branche.setdefault(k, v)            # les valeurs déjà en mémoire gardent la priorité
+        corresp_metierxprofil_branche.setdefault(k, v)                 # les valeurs déjà en mémoire gardent la priorité
     print(f"{len(sur_disque)} correspondances rechargées depuis {FICHIER}")
 with verrou_corresp:
     sauver_corresp()
@@ -489,6 +541,7 @@ PROMPT_BRANCHE_UNIQUE = """Voici la liste des BRANCHES PROFESSIONNELLES existant
 {branches}
 
 Métier à classer : {metier}
+Profil de la personne qui a déclaré ce métier : {profil}
 
 Choisis UNE SEULE branche de la liste si le métier correspond clairement à l'une d'elles, selon sa fonction et
 son périmètre professionnel réel d'après les définitions.
@@ -496,6 +549,10 @@ son périmètre professionnel réel d'après les définitions.
 RÈGLES :
 - Choisis uniquement parmi les branches de la liste. N'invente aucune branche.
 - Le métier est saisi librement : corrige mentalement les fautes, abréviations et variantes d'écriture sans modifier son sens.
+- Le profil est un CONTEXTE : il indique le statut de la personne (par exemple étudiant en santé, professionnel de santé).
+  Utilise-le pour lever un doute (un « étudiant » dont le profil est « ETUDIANT EN SANTE » est dans une filière de santé),
+  mais il ne remplace jamais le métier et ne permet pas de déduire un diplôme ou une qualification absente de l'intitulé.
+  Si le profil est « non précisé », ignore-le.
 - Ne déduis pas de diplôme, de qualification ou de spécialité absente de l'intitulé.
 - Un métier clairement sans lien avec la santé ou le médico-social va dans NON PRIS EN CHARGE.
 - Un métier clairement de santé sans branche spécialisée va dans AUTRES PROFESSIONNELS DE LA SANTE.
@@ -511,12 +568,13 @@ Réponds par UNE seule ligne au format :
 code ou AUCUNE | raison en 8 mots maximum
 Aucun autre texte."""
 
-journal = []                                       # trace des décisions du cas B : (métier, statut, branche(s), raison)
+journal = []                          # trace des décisions : (métier, profil, statut, branche(s), raison)
 
-def classer_high(metier):
+def classer_high(metier, profil):
     """Retourne (branche, raison) ; branche = None si ambigu ; branche = False si pas de réponse exploitable."""
     try:
-        rep = appeler(PROMPT_BRANCHE_UNIQUE.format(branches=liste_b, metier=metier, precisions=PRECISIONS),
+        rep = appeler(PROMPT_BRANCHE_UNIQUE.format(branches=liste_b, metier=metier, profil=texte_profil(profil),
+                                                   precisions=PRECISIONS),
                       effort=EFFORT_B)
     except Indisponible as e:
         return False, f"Albert indisponible ({e})"
@@ -531,96 +589,136 @@ def classer_high(metier):
             return codes_b[choix], raison
     return False, "réponse inexploitable"
 
-def ajouter_a_liste(metier, anciennes):
-    """Ambigu : dictionnaire[métier] = liste contenant les anciennes branches, sans doublon.
-    Si le métier a déjà une liste, on la complète ; sinon on la crée. À appeler sous verrou_corresp."""
-    actuelle = corresp_metier_branche.get(metier)
+def ajouter_a_liste(cle, anciennes):
+    """Ambigu : dictionnaire[(métier, profil)] = liste contenant les anciennes branches, sans doublon.
+    Si la combinaison a déjà une liste, on la complète ; sinon on la crée. À appeler sous verrou_corresp."""
+    actuelle = corresp_metierxprofil_branche.get(cle)
     liste = list(actuelle) if isinstance(actuelle, list) else []
     for b in anciennes:
         if pd.notna(b) and b not in liste:
             liste.append(b)
-    corresp_metier_branche[metier] = liste
+    corresp_metierxprofil_branche[cle] = liste
     return liste
 
-def associer_branche(metier, branche, classer=True, anciennes=None):
-    """Retourne la branche à utiliser pour le couple (métier, branche).
+def associer_branche(metier, branche, profil=None, classer=True, anciennes=None):
+    """Retourne la branche à utiliser pour le trio (métier, branche, profil).
+    - profil NON PRIS EN CHARGE : branche NON PRIS EN CHARGE directement, sans requête ; la combinaison
+      (métier, profil) est ajoutée au dictionnaire si elle est nouvelle (métier renseigné)
     - métier NC ou vide : branche inchangée
-    - A : métier dans corresp_metier_branche : valeur de la clé si ce n'est pas une liste, sinon branche inchangée
-    - B : métier absent : reasoning high parmi les branches existantes
-        . non ambigu : la nouvelle branche remplace l'ancienne ; dictionnaire[métier] = nouvelle branche ; sauvegarde
-        . ambigu     : l'ancienne branche est conservée ; dictionnaire[métier] = liste qui contient l'ancienne branche
-                       (ajoutée si elle n'y est pas déjà) ; sauvegarde
+    - A : (métier, profil) dans corresp_metierxprofil_branche : valeur de la clé si ce n'est pas une liste, sinon branche inchangée
+    - B : combinaison jamais rencontrée : reasoning high parmi les branches existantes, profil dans le prompt
+        . non ambigu : la nouvelle branche remplace l'ancienne ; dictionnaire[(métier, profil)] = nouvelle branche
+        . ambigu     : l'ancienne branche est conservée ; dictionnaire[(métier, profil)] = liste contenant l'ancienne
+                       branche (ajoutée si elle n'y est pas déjà)
         . Albert indisponible / réponse inexploitable : branche inchangée, rien n'est enregistré
+      Chaque ajout est sauvegardé tout de suite dans le JSON.
     anciennes : anciennes branches à mettre dans la liste en cas d'ambiguïté (par défaut : [branche]).
-    classer=False : lecture seule du dictionnaire, aucune requête."""
-    if pd.isna(metier) or not str(metier).strip() or str(metier).strip().upper() == NC:
-        return branche
-    m = str(metier).strip()
+    classer=False : lecture seule du dictionnaire, aucune requête et aucune écriture."""
+    cle = cle_mp(metier, profil)
+    metier_nc = cle is None or cle[0].upper() == NC
 
-    for k in (m, m.upper()):                                       # A
-        if k in corresp_metier_branche:
-            v = corresp_metier_branche[k]
+    if est_npec(profil):                                           # le profil impose la branche
+        if classer and not metier_nc and corresp_metierxprofil_branche.get(cle) != PROFIL_NPEC:
+            with verrou_corresp:
+                corresp_metierxprofil_branche[cle] = PROFIL_NPEC   # combinaison nouvelle : ajoutée et sauvegardée
+                sauver_corresp()
+        return PROFIL_NPEC
+    if metier_nc:
+        return branche
+
+    for k in dict.fromkeys([cle, (cle[0].upper(), cle[1])]):       # A
+        if k in corresp_metierxprofil_branche:
+            v = corresp_metierxprofil_branche[k]
             return branche if isinstance(v, list) else v
     if not classer:
         return branche
 
-    b, raison = classer_high(m)                                    # B
+    m, p = cle
+    b, raison = classer_high(m, p)                                 # B
     if b is False:
-        journal.append((m, "échec", "", raison))
-        print(f"  « {m} » non traité : {raison}")
+        journal.append((m, p, "échec", "", raison))
+        print(f"  « {m} » | {p} non traité : {raison}")
         return branche
     if b is None:                                                  # ambigu : on garde l'ancienne branche
         a_ajouter = list(anciennes) if anciennes is not None else [branche]
         with verrou_corresp:
-            liste = ajouter_a_liste(m, a_ajouter)                  # clé = métier, valeur = liste avec l'ancienne branche
+            liste = ajouter_a_liste(cle, a_ajouter)                # clé = (métier, profil), valeur = liste avec l'ancienne branche
             sauver_corresp()
-        journal.append((m, "ambigu", " | ".join(map(str, liste)), raison))
-        print(f"  « {m} » ambigu ({raison}) : ancienne branche conservée, liste = {liste}")
+        journal.append((m, p, "ambigu", " | ".join(map(str, liste)), raison))
+        print(f"  « {m} » | {p} ambigu ({raison}) : ancienne branche conservée, liste = {liste}")
         return branche
-    journal.append((m, "classé", b, raison))                       # non ambigu : nouvelle branche
-    print(f"  {m} -> {nettoyer(b)}  ({raison})")
+    journal.append((m, p, "classé", b, raison))                    # non ambigu : nouvelle branche
+    print(f"  {m} | {p} -> {nettoyer(b)}  ({raison})")
     with verrou_corresp:
-        corresp_metier_branche[m] = b                              # clé = métier, valeur = nouvelle branche
+        corresp_metierxprofil_branche[cle] = b                     # clé = (métier, profil), valeur = nouvelle branche
         sauver_corresp()
     return b
 
-def appliquer_branches(df, col_m="Métier", col_b="Branche professionnelle", workers=4):
-    """Applique associer_branche à tout un DataFrame ; les métiers inconnus sont classés en parallèle (une requête high chacun)."""
+def appliquer_branches(df, col_m="Métier", col_b="Branche professionnelle", col_profil=COL_PROFIL, workers=4):
+    """Applique associer_branche à tout un DataFrame.
+    - lignes au profil NON PRIS EN CHARGE : branche NON PRIS EN CHARGE, combinaisons nouvelles ajoutées au JSON (une écriture)
+    - autres combinaisons (métier, profil) jamais rencontrées : classées en parallèle (une requête high chacune)
+    - dernière passe : lecture seule du dictionnaire (aucune requête)"""
     m_str = df[col_m].astype("string").str.strip()
-    inconnus = sorted({x for x in m_str.dropna()
-                       if x and x.upper() != NC and x not in corresp_metier_branche and x.upper() not in corresp_metier_branche})
-    # anciennes branches de chaque métier inconnu : toutes celles présentes dans ses lignes (valeurs vides ignorées)
-    anciennes = (pd.DataFrame({"m": m_str, "b": df[col_b]}).dropna()
-                 .groupby("m")["b"].agg(lambda s: list(dict.fromkeys(s))).to_dict())
-    print(f"{len(inconnus)} métiers absents de corresp_metier_branche -> reasoning {EFFORT_B}")
+    if col_profil in df.columns:
+        p_norm = df[col_profil].map(norm_profil)
+    else:
+        print(f"Colonne « {col_profil} » absente : le profil est traité comme NC.")
+        p_norm = pd.Series(NC, index=df.index)
 
-    def traiter(x):
-        liste = anciennes.get(x, [])
-        associer_branche(x, liste[0] if liste else None, anciennes=liste)
+    m_up = m_str.fillna("").str.upper()
+    valides = (m_up != "") & (m_up != NC)
+    base = pd.DataFrame({"m": m_str, "p": p_norm, "b": df[col_b]})[valides]
+
+    # 1. profil NON PRIS EN CHARGE : combinaisons nouvelles ajoutées en une seule écriture
+    npec = base["p"] == PROFIL_NPEC
+    nouveaux_npec = [k for k in {(m, PROFIL_NPEC) for m in base.loc[npec, "m"]}
+                     if corresp_metierxprofil_branche.get(k) != PROFIL_NPEC]
+    if nouveaux_npec:
+        with verrou_corresp:
+            for k in nouveaux_npec:
+                corresp_metierxprofil_branche[k] = PROFIL_NPEC
+            sauver_corresp()
+    print(f"{int((p_norm == PROFIL_NPEC).sum())} lignes au profil {PROFIL_NPEC} -> branche imposée "
+          f"({len(nouveaux_npec)} combinaisons ajoutées)")
+
+    # 2. combinaisons (métier, profil) jamais rencontrées
+    autres = base[~npec]
+    inconnus = sorted({(m, p) for m, p in zip(autres["m"], autres["p"])
+                       if (m, p) not in corresp_metierxprofil_branche
+                       and (m.upper(), p) not in corresp_metierxprofil_branche})
+    anciennes = (autres.dropna(subset=["b"]).groupby(["m", "p"])["b"]
+                 .agg(lambda s: list(dict.fromkeys(s))).to_dict())
+    print(f"{len(inconnus)} combinaisons (métier, profil) absentes du dictionnaire -> reasoning {EFFORT_B}")
+
+    def traiter(k):
+        liste = anciennes.get(k, [])
+        associer_branche(k[0], liste[0] if liste else None, profil=k[1], anciennes=liste)
 
     with ThreadPoolExecutor(workers) as ex:
         list(ex.map(traiter, inconnus))
-    # le dictionnaire est à jour : cette passe lit seulement le dictionnaire (aucune requête)
-    return pd.Series([associer_branche(m, b, classer=False) for m, b in zip(df[col_m], df[col_b])], index=df.index)
 
+    # 3. le dictionnaire est à jour : cette passe lit seulement le dictionnaire (aucune requête)
+    return pd.Series([associer_branche(m, b, profil=p, classer=False)
+                      for m, b, p in zip(df[col_m], df[col_b], p_norm)], index=df.index)
 
 if __name__ == "__main__":
-    associer_branche("ATTACHE ADMNISTRATION RH (PROFESSIONNEL DE SANTE)","NC")
+    #associer_branche("ATTACHE ADMNISTRATION RH", "NC", profil="NON PRIS EN CHARGE")
     # associer("Métier","opthtalmo")
 
-    # df = pd.read_excel(
-    # 'firstransform.xlsx',   # on lit en texte brut, sans interprétation
-    # converters={'Date': lambda x: pd.to_datetime(x, format='%d/%m/%Y', errors='coerce')},
-    #     )
-    # df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    # df = df[(df["Date"] > "2026-10-01") & ((df["Date"] <= "2026-10-31"))]
+    df = pd.read_excel(
+    'firstransform.xlsx',   # on lit en texte brut, sans interprétation
+    converters={'Date': lambda x: pd.to_datetime(x, format='%d/%m/%Y', errors='coerce')},
+        )
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df[(df["Date"] > "2026-09-01") & ((df["Date"] <= "2026-09-30"))]
 
-    # COLONNES = ["Motif", "Sexe", "Orientation conseillée","Métier"]
+    COLONNES = ["Motif", "Sexe", "Orientation conseillée","Métier","Profil de l'appelant"]
 
-    # for col in COLONNES:
-    #     df[col] = associer_colonne(df[col], col)
+    for col in COLONNES:
+        df[col] = associer_colonne(df[col], col)
 
-    # df["Branche professionnelle"] = appliquer_branches(df)
+    df["Branche professionnelle"] = appliquer_branches(df)
 
     #Logger tout ça
     #Récupérer la liste des métiers ambigus

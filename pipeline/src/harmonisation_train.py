@@ -1,4 +1,6 @@
-""" Module pour harmoniser certains colonnes (Métier, Motif, Orientation Conseillée, Sexe) + Branche"""
+""" 
+Module pour harmoniser certains colonnes (Métier, Motif, Orientation Conseillée, Sexe) + Branche
+"""
 
 import os, re, json, time, hashlib, threading
 import requests
@@ -422,7 +424,7 @@ def associer(col, chaine):
             try:
                 reponse = appeler(PROMPT_ASSOC.format(
                     nom=col, valeurs="\n".join(candidats), chaine=chaine,
-                    regles=REGLES, exemples=EXEMPLES.get(col, "")), effort="medium")
+                    regles=REGLES, exemples=EXEMPLES.get(col, "")), effort="high")
             except Indisponible:
                 print(f"  « {chaine} » non traitée (Albert indisponible), à relancer plus tard")
                 return None
@@ -711,14 +713,43 @@ if __name__ == "__main__":
     converters={'Date': lambda x: pd.to_datetime(x, format='%d/%m/%Y', errors='coerce')},
         )
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df[(df["Date"] > "2026-09-01") & ((df["Date"] <= "2026-09-30"))]
+    #df = df[(df["Date"] > "2026-10-01") & ((df["Date"] <= "2026-10-30"))]
+
+    #Etape 5
+    df.loc[(df["APHP"] == "APHP") & (df["Statut de l'appelant"] == "ETUDIANT EN SANTE"),"Profil de l'appelant"] = "ETUDIANT EN SANTE"
+    df.loc[(df["APHP"] == "APHP") & (df["Statut de l'appelant"] == "NC"),"Profil de l'appelant"] = "NON PRIS EN CHARGE"
+    df.loc[(df["APHP"] == "APHP") & (df["Statut de l'appelant"].isin(["SALARIE","LIBERAL","RETRAITE"])),"Profil de l'appelant"] = "PROFESSIONNEL DE SANTE"
+
+    #Etape 4
+    df.loc[df["Orientation conseillée"]=="Psychologue en face à face Réseau SPS",
+                                        "Nom du spécialiste conseillée"] = "Psychologue SPS"
+
+    df.loc[df["Orientation conseillée"]=="Psychologue en face à face Réseau SPS",
+                                        "Orientation conseillée"] = "Psychologue en face à face"
+    
+
+    df.loc[df["Statut de l'appelant"]=="NON PRIS EN CHARGE", "Statut Code"] = "NC"
+    #df = df.drop(columns=["Statut de l’appelant"])
+
+
 
     COLONNES = ["Motif", "Sexe", "Orientation conseillée","Métier","Profil de l'appelant"]
 
+    #Etape 3
     for col in COLONNES:
         df[col] = associer_colonne(df[col], col)
 
+    #Etape 6
     df["Branche professionnelle"] = appliquer_branches(df)
+
+    df = df.sort_values(by=["Date", "Heure"], ascending=[False, False])
+
+    df.columns = [
+            "PROFIL APPELANT" 
+                if(name_col == "Profil de l'appelant") 
+                else ("BRANCHE PRO" if(name_col == "Branche professionnelle") else name_col) 
+            for name_col in df.columns
+                  ]
 
     #Logger tout ça
     #Récupérer la liste des métiers ambigus

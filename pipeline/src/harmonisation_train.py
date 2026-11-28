@@ -1296,6 +1296,8 @@ if __name__ == "__main__":
         converters={'Date': lambda x: pd.to_datetime(x, format='%d/%m/%Y', errors='coerce')},
     )
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df[(df["Date"] >= "2025-07-01") & ((df["Date"] <= "2025-08-31"))]
+
     print(f"{len(df)} lignes lues")
 
     profil_base = df[COL_PROFIL].copy()          # valeur d'origine, avant l'étape 5
@@ -1307,7 +1309,7 @@ if __name__ == "__main__":
 
     # Etape 4
     df.loc[df["Orientation conseillée"] == "Psychologue en face à face Réseau SPS",
-           "Nom du spécialiste conseillée"] = "Psychologue SPS"
+           "Nom du spécialiste conseillé"] = "Psychologue SPS"
     df.loc[df["Orientation conseillée"] == "Psychologue en face à face Réseau SPS",
            "Orientation conseillée"] = "Psychologue en face à face"
     df.loc[df["Statut de l'appelant"] == "NON PRIS EN CHARGE", "Statut Code"] = "NC"
@@ -1322,6 +1324,8 @@ if __name__ == "__main__":
     df["Métier"] = df["Métier"].apply(lambda x: "NC" if (x == "NON RENSEIGNE") else x)
     pd.DataFrame(journal_profil, columns=["combinaison", "catégorie", "source", "raison"]) \
         .to_excel(base_nom + "_decisions_profil.xlsx", index=False)
+
+    #df.to_excel("test.xlsx", index = False)
 
     # Etape 6
     df["Branche professionnelle"] = appliquer_branches(df)
